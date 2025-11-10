@@ -2,6 +2,12 @@
 #include <WiFi.h>
 
 #define CHANNEL 1
+#define BUTTON_PIN 0 // 按鈕連接的 GPIO 引腳
+
+enum State {
+    IDLE, // 待機狀態
+    FIRE // 開火狀態
+};
 
 // 接收端的 MAC 地址陣列
 uint8_t peers[][6] = {
@@ -10,6 +16,9 @@ uint8_t peers[][6] = {
     {0x10, 0x20, 0xBA, 0xAD, 0xC0, 0x68},
     {0x10, 0x20, 0xBA, 0xAD, 0xC2, 0x10}
 };
+
+State currentState = IDLE; // 初始狀態
+TaskHandle_t sendTaskHandle = NULL; // 任務句柄
 
 // 函數：格式化 MAC 地址為字符串
 String formatMacAddress(const uint8_t *mac_addr) {
@@ -40,6 +49,27 @@ void sendMessage(const char *message) {
     Serial.println("Message sent: \"" + String(message) + "\" on CHANNEL " + CHANNEL);
 }
 
+// 任務：發送訊息
+void sendTask(void *parameter) {
+    while (true) {
+        if (currentState == IDLE) {
+            sendMessage("Hello ESP-NOW");
+            vTaskDelay(2000 / portTICK_PERIOD_MS); // 每 2 秒發送一次
+        }
+    }
+}
+// 子程式：檢查按鈕狀態並切換狀態
+State checkButtonState() {
+    int buttonState = digitalRead(BUTTON_PIN);
+    
+    if (buttonState == LOW) { // 按下時，GPIO 為 LOW
+        currentState = FIRE;
+    } else {
+        currentState = IDLE;
+    }
+    return currentState;
+}
+
 void setup() {
     Serial.begin(115200);
     WiFi.mode(WIFI_STA);
@@ -48,6 +78,8 @@ void setup() {
     // 印出自身的 MAC 地址
     Serial.print("Master MAC Address: ");
     Serial.println(WiFi.macAddress());
+
+    pinMode(BUTTON_PIN, INPUT_PULLUP); // 設定按鈕引腳為上拉輸入
 
     if (esp_now_init() != 0) {
         Serial.println("Error initializing ESP-NOW");
@@ -70,10 +102,19 @@ void setup() {
 }
 
 void loop() {
-    const char *message = "Hello ESP-NOW";
-    
-    // 調用發送訊息的子程式
-    sendMessage(message);
-    
-    delay(2000);
+    switch (checkButtonState()) { // 檢查按鈕狀態並更新當前狀態
+        case IDLE:
+            if (sendTaskHandle == NULL)
+                xTaskCreate(sendTask, "SendTask", 2048, NULL, 1, &sendTaskHandle);
+            break;
+        case FIRE:
+            if (sendTaskHandle != NULL) {
+                vTaskDelete(sendTaskHandle); // 刪除任務
+                sendTaskHandle = NULL; // 清空任務句柄
+            }
+            // 調用發送訊息的子程式
+            sendMessage("Fire ESP-NOW");
+            delay(50);
+            break;
+    }
 }
