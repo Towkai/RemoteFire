@@ -114,7 +114,7 @@ void loop() {
             }
             // 調用發送訊息的子程式
             sendMessage("Fire ESP-NOW");
-            delay(50);
+            delay(500);
             break;
     }
 }
