@@ -2,18 +2,21 @@
 #include <WiFi.h>
 
 #define LED_PIN 8 // LED 連接在 GPIO 8 上
+#define RELAY_PIN 10 // 繼電器 連接在 GPIO 10 上
 #define CHANNEL 1
 
 #define BRIGHT 0
 #define DARK 1
 
 enum State {
-    RECEIVING, // 接收中狀態
-    MESSAGE_RECEIVED // 訊息接收狀態
+    STANDBY, // 接收中狀態
+    RECEIVED // 訊息接收狀態
 };
 
-State currentState = RECEIVING; // 初始狀態
+State currentState = STANDBY; // 初始狀態
 unsigned long lastReceivedTime = 0; // 上次收到訊息的時間
+unsigned long lastFireTime = 0; // 上次收到訊息的時間
+TaskHandle_t ledTaskHandle = NULL; // 任務句柄
 
 // 函數：格式化 MAC 地址為字符串
 String formatMacAddress(const uint8_t *mac_addr) {
@@ -23,6 +26,19 @@ String formatMacAddress(const uint8_t *mac_addr) {
         if (i < 5) macString += ":"; // 在每個字節之間添加冒號
     }
     return macString;
+}
+// 任務：發送訊息
+void ledTask(void *parameter) {
+    while (true) {        
+        digitalWrite(LED_PIN, BRIGHT);
+        delay(100);
+        digitalWrite(LED_PIN, DARK);
+        delay(100);
+        digitalWrite(LED_PIN, BRIGHT);
+        delay(100);
+        digitalWrite(LED_PIN, DARK);
+        delay(700);
+    }
 }
 
 void onReceive(const esp_now_recv_info* info, const uint8_t *data, int len) {
@@ -36,13 +52,19 @@ void onReceive(const esp_now_recv_info* info, const uint8_t *data, int len) {
     }
     Serial.println(); // 換行
 
-    currentState = MESSAGE_RECEIVED; // 設置狀態為訊息接收
+    currentState = RECEIVED; // 設置狀態為訊息接收
     lastReceivedTime = millis(); // 記錄收到訊息的時間
+    if (String((char*)data).indexOf("Fire") >= 0) {
+        lastFireTime = millis();
+    }
 }
 
 void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
+    pinMode(RELAY_PIN, OUTPUT);
+    digitalWrite(LED_PIN, DARK);
+    
     WiFi.mode(WIFI_STA);
     Serial.println("ESP-NOW Receiver on CHANNEL " + String(CHANNEL));
 
@@ -62,26 +84,32 @@ void loop() {
     unsigned long currentTime = millis();
 
     switch (currentState) {
-        case MESSAGE_RECEIVED:
+        case STANDBY:
+            // 接收中狀態，LED 燈閃爍
+            if (ledTaskHandle == NULL)
+                xTaskCreate(ledTask, "LEDTask", 2048, NULL, 1, &ledTaskHandle);
+            break;
+        case RECEIVED:
+            if (ledTaskHandle != NULL) {
+                vTaskDelete(ledTaskHandle); // 刪除任務
+                ledTaskHandle = NULL; // 清空任務句柄
+            }
             // 收到訊息時，LED 恆亮
             digitalWrite(LED_PIN, BRIGHT);
 
             // 如果兩秒內沒有接收到其他訊息，則回到接收中狀態
             if (currentTime - lastReceivedTime >= 2500) {
-                currentState = RECEIVING; // 回到接收中狀態
+                currentState = STANDBY; // 回到接收中狀態
             }
             break;
-
-        case RECEIVING:
-            // 接收中狀態，LED 燈閃爍
-            digitalWrite(LED_PIN, BRIGHT);
-            delay(100);
-            digitalWrite(LED_PIN, DARK);
-            delay(100);
-            digitalWrite(LED_PIN, BRIGHT);
-            delay(100);
-            digitalWrite(LED_PIN, DARK);
-            delay(700);
-            break;
     }
+    if (currentTime - lastFireTime >= 500) 
+    {
+        digitalWrite(RELAY_PIN, DARK);
+    }
+    else if (lastFireTime > 0 && currentTime - lastFireTime < 500)
+    {
+        digitalWrite(RELAY_PIN, BRIGHT);
+    }
+    delay(100);
 }
